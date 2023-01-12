@@ -31,7 +31,7 @@ data FuncInfo = FuncInfo
   }
   deriving (Eq)
 instance Show FuncInfo where
-  show f = (show (location f)) ++ " DEF " ++ (show (context f)) ++ "::" ++ (show (name f)) ++"( "++(show (nbArg f))++" )"
+  show f = show (location f) ++ " DEF " ++ show (context f) ++ "::" ++ show (name f) ++"( "++show (nbArg f)++" )"
 
 -- To use as a State
 data Info = Info
@@ -40,21 +40,22 @@ data Info = Info
   }
   deriving (Eq)
 instance Show Info where
-  show info = (show (filename info)) ++ ":" ++ (show (pos info))
+  show info = show (filename info) ++ ":" ++ show (pos info)
 
 initInfo :: String -> Info
 initInfo nameOfFile = Info nameOfFile 0
 
 incPos :: Info -> Info
-incPos info = Info { filename=(filename info), pos= (pos info) + 1 }
--- *****************************************************************************
+incPos info = Info { filename=filename info, pos= pos info + 1 }
 
+
+-- *****************************************************************************
 -- wordsTok :: TP.Parsec String st [String]
 -- wordsTok =
 --   do first <- wordTok
 --      next <- otherWordsTok
 --      return (first:next)
-     
+
 -- otherWordsTok :: TP.Parsec String st [String]      
 -- otherWordsTok =
 --   (TP.char ' ' >> wordsTok) TP.<|> (TP.char '\n' >> wordsTok) TP.<|> (return [])
@@ -126,7 +127,7 @@ incPos info = Info { filename=(filename info), pos= (pos info) + 1 }
 --   whitesTok
 --   p <- TP.between (TP.char '(') (TP.char ')') paramsTok
 --   return (["CALL",v,f]:p)
-  
+
 -- paramsTok :: TP.Parsec String Info [[String]]
 -- paramsTok = do
 --    p <- paramTok `TPC.sepBy` (TP.char ',')
@@ -144,7 +145,7 @@ incPos info = Info { filename=(filename info), pos= (pos info) + 1 }
 --   l <- TP.letter TP.<|> TP.char '_'
 --   ls <- TP.many (TP.alphaNum TP.<|> TP.oneOf "_[]\"")
 --   trace ("VAR l:"++(show l)++" ls:"++(show ls)) $ return (l:ls)
-  
+
 -- parseCountTXT :: String -> Either TP.ParseError [(String,Info)]
 -- parseCountTXT input = TP.runParser (collWordsTok) (initInfo "ukn") ("ukn") input
 
@@ -161,31 +162,31 @@ balancedBrakTok = do
 -- possibleCallTok = do
 --   TP.skipMany (TP.noneOf "{}")
 --   TP.many (do { TP.skipMany (TP.noneOf "{}")
---               ; fc <- funcCallTok
+--               ; fc <- funcCallTo
 
 
 -- ******************************************************************************
 -- ************************************************************ funcCall Elements
 whitesTok :: TP.Parsec String ParseInfo ()
-whitesTok = trace ("W:") $ TP.skipMany sepTok
+whitesTok = trace "W:" $ TP.skipMany sepTok
 
 -- WARN: TP.isSpace uses Data.Char.isSpace, True for " \t\n\r\v\f"
 sepTok :: TP.Parsec String ParseInfo Char
-sepTok = trace ("S:") $ (TP.oneOf " \t\f\v" TP.<|> eolCountTok)
+sepTok = trace "S:" $ (TP.oneOf " \t\f\v" TP.<|> eolCountTok)
 
 eolCountTok :: TP.Parsec String ParseInfo Char
 eolCountTok = do
   e <- TP.char '\n'
   state <- TP.getState
   let i' = incPos (currentPos state)
-  trace ("EOL:state+1") $ TP.setState (state { currentPos = i' })
+  trace "EOL:state+1" $ TP.setState (state { currentPos = i' })
   return e
 
 litteralTok:: TP.Parsec String ParseInfo String
 litteralTok =
-  TP.try( funcCallTok )
+  TP.try funcCallTok
   TP.<|> stringTok
-  TP.<|> TP.try(arrayTok)
+  TP.<|> TP.try arrayTok
   TP.<|> varnameTok
   TP.<|> numberTok
 
@@ -194,7 +195,7 @@ varnameTok :: TP.Parsec String ParseInfo String
 varnameTok = do
   l <- TP.letter TP.<|> TP.char '_'
   ls <- TP.many (TP.alphaNum TP.<|> TP.oneOf "_")
-  trace ("VAR l:"++(show l)++" ls:"++(show ls)) $ return (l:ls)
+  trace ("VAR l:"++show l++" ls:"++show ls) $ return (l:ls)
 
 numberTok :: TP.Parsec String ParseInfo String
 numberTok = do
@@ -208,7 +209,7 @@ stringTok = do
 
 arrayTok :: TP.Parsec String ParseInfo String
 arrayTok = do
-  l <- (varnameTok TP.<|> funcCallTok)
+  l <- varnameTok TP.<|> funcCallTok
   i <-  TP.between (TP.char '[') (TP.char ']') inside
   return ("ARRAY "++l)
   where inside = do
@@ -227,18 +228,17 @@ funcCallTok = do
                                                 (TP.char ','))
   state <- TP.getState
   let newFC = FuncInfo f "ukn" (length p) (currentPos state)
-  TP.setState (state { calls = newFC:(calls state) })
-  return ("FUNCALL "++f++"("++(show (length p))++")")
+  TP.setState (state { calls = newFC: calls state })
+  return ("FUNCALL "++f++"("++ show (length p) ++")")
 
 funcnameTok :: TP.Parsec String ParseInfo String
 funcnameTok = do
   l <- TP.letter TP.<|> TP.char '_'
   ls <- TP.many (TP.alphaNum TP.<|> TP.oneOf "_")
-  trace ("FUNC l:"++(show l)++" ls:"++(show ls)) $ return (l:ls)
+  trace ("FUNC l:"++ show l ++" ls:"++ show ls) $ return (l:ls)
 
 parseFunc :: TP.Parsec String ParseInfo a -> String -> Either TP.ParseError a
-parseFunc rule input = TP.runParser rule (initParseInfo "cin") ("ukn") input
+parseFunc rule = TP.runParser rule (initParseInfo "cin") "ukn"
 
 parseFuncS :: TP.Parsec String ParseInfo a -> String -> Either TP.ParseError ParseInfo
-parseFuncS rule input = TP.runParser (rule >> TP.getState) (initParseInfo "cin") ("ukn") input
-
+parseFuncS rule = TP.runParser (rule >> TP.getState) (initParseInfo "cin") "ukn"
