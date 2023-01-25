@@ -1,0 +1,5 @@
+        pile = new Stack<CardElement>();
+        topTransform = gameObject.transform;
+
+        game = FindObjectOfType<DeckBuilder>();
+        animator = FindObjectOfType<CardAnimator>();

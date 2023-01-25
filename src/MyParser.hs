@@ -3,6 +3,12 @@ module MyParser where
 import qualified Text.Parsec as TP
 import qualified Text.Parsec.Combinator as TPC
 import Debug.Trace
+-- import Text.Parsec (label)
+-- import Text.Parsec.Token (GenTokenParser(reserved, dot))
+-- import Control.Arrow (Kleisli(runKleisli))
+-- import Data.Ratio (numerator)
+-- import qualified Text.Parsec as TPD
+-- import Text.Parsec (State(State))
 
 -- text =
 --   do results <- TP.many wordsTok
@@ -17,10 +23,55 @@ data ParseInfo = ParseInfo
   { currentPos  :: Info
   , defs        :: [FuncInfo]
   , calls       :: [FuncInfo]
+  , level       :: Int        -- indent/hierarchy level
+  , nbCall      :: Int
   }
   deriving (Show, Eq)
 initParseInfo :: String -> ParseInfo
-initParseInfo  nameOfFile = ParseInfo (initInfo nameOfFile) [] []
+initParseInfo  nameOfFile = ParseInfo (initInfo nameOfFile) [] [] 0 0
+
+-- *****************************************************************************
+-- *********************************************************************** Debug
+-- Manage indentation by increasing/decreasing StateInfo nLevel
+incLevel :: TP.Parsec String ParseInfo ()
+incLevel = do
+  s <- TP.getState
+  let nLevel = level s
+  TP.setState (s { level = nLevel+2 })
+
+decLevel :: TP.Parsec String ParseInfo ()
+decLevel = do
+  s <- TP.getState
+  let nLevel = level s
+  TP.setState (s { level = nLevel-2 })
+
+-- turn ParseInfo nLevel into a String with nLevel '.''
+indentState ::  TP.Parsec String ParseInfo String
+indentState = do
+  s <- TP.getState
+  return (replicate (level s) '.')
+
+-- to be called at begining of Parse rule
+-- trace indended label and increase indentation
+startTrace :: String -> TP.Parsec String ParseInfo ()
+startTrace label = do
+  prefix <- indentState
+  let indentLabel = prefix ++ "__" ++ label
+  TPC.parserTrace indentLabel
+  incLevel
+-- to be called at end of Parser rule
+-- decrease indentation
+endTrace = do
+  decLevel
+
+-- withDebug label rules wrap rules in startTrace label and endTrace
+withDebug :: String -> TP.Parsec String ParseInfo a -> TP.Parsec String ParseInfo a
+withDebug label rules = do
+  startTrace label
+  res <- rules
+  endTrace
+  return res
+-- *****************************************************************************
 
 -- About Func Def
 data FuncInfo = FuncInfo
@@ -80,7 +131,7 @@ incPos info = Info { filename=filename info, pos= pos info + 1 }
 
 
 -- *****************************************************************************
--- ********************************************************************* Function
+-- ******************************************************************** Function
 -- funcDefTok :: TP.Parsec String Info [[String]]
 -- funcDefTok = do
 --   t <- typeTok
@@ -168,77 +219,143 @@ balancedBrakTok = do
 -- ******************************************************************************
 -- ************************************************************ funcCall Elements
 whitesTok :: TP.Parsec String ParseInfo ()
-whitesTok = trace "W:" $ TP.skipMany sepTok
+whitesTok = TP.skipMany sepTok >> TPC.parserTrace "W:"
+
+whites1Tok :: TP.Parsec String ParseInfo ()
+whites1Tok = TP.skipMany1 sepTok >> TPC.parserTrace "W1:"
 
 -- WARN: TP.isSpace uses Data.Char.isSpace, True for " \t\n\r\v\f"
 sepTok :: TP.Parsec String ParseInfo Char
-sepTok = trace "S:" $ (TP.oneOf " \t\f\v" TP.<|> eolCountTok)
+sepTok = do
+  TPC.parserTrace "S:"
+  TP.oneOf "; \t\f\v" TP.<|> eolCountTok
 
 eolCountTok :: TP.Parsec String ParseInfo Char
 eolCountTok = do
   e <- TP.char '\n'
   state <- TP.getState
   let i' = incPos (currentPos state)
-  trace "EOL:state+1" $ TP.setState (state { currentPos = i' })
+  TP.setState (state { currentPos = i' }) >> TPC.parserTrace "EOL:state+1"
   return e
 
+-- TODO 2+3 is also a numerator
 litteralTok:: TP.Parsec String ParseInfo String
-litteralTok =
-  TP.try funcCallTok
-  TP.<|> stringTok
-  TP.<|> TP.try arrayTok
-  TP.<|> varnameTok
-  TP.<|> numberTok
-
+litteralTok = do
+  TP.try funcCallTokD
+  TP.<|> TP.try collecTokD
+  TP.<|> TP.try arrayTokD
+  TP.<|> varnameTokD
+  TP.<|> stringTokD
+  TP.<|> numberTokD
+litteralTokD = withDebug "litteral" litteralTok
 
 varnameTok :: TP.Parsec String ParseInfo String
 varnameTok = do
   l <- TP.letter TP.<|> TP.char '_'
   ls <- TP.many (TP.alphaNum TP.<|> TP.oneOf "_")
-  trace ("VAR l:"++show l++" ls:"++show ls) $ return (l:ls)
+  TPC.parserTrace ("VAR l:"++show l++" ls:"++show ls)
+  return (l:ls)
+varnameTokD = withDebug "varname" varnameTok
 
 numberTok :: TP.Parsec String ParseInfo String
 numberTok = do
   n <- TP.many1 (TP.digit TP.<|> TP.oneOf "-e.")
   return ("NUM "++n)
+numberTokD = withDebug "number" numberTok
 
 stringTok :: TP.Parsec String ParseInfo String
 stringTok = do
   s <- TP.between (TP.char '"') (TP.char '"') (TP.many (TP.noneOf ['"']))
   return ("STR "++s)
+stringTokD = withDebug "string" stringTok
 
 arrayTok :: TP.Parsec String ParseInfo String
 arrayTok = do
-  l <- varnameTok TP.<|> funcCallTok
+  l <- varnameTokD --TODO ? TP.<|> funcCallTok
   i <-  TP.between (TP.char '[') (TP.char ']') inside
   return ("ARRAY "++l)
   where inside = do
           whitesTok
-          ie <- litteralTok
+          ie <- litteralTokD
           whitesTok
           return ie
+arrayTokD = withDebug "array" arrayTok
+
+collecTok :: TP.Parsec String ParseInfo String
+collecTok = do
+  l <- varnameTokD
+  TP.between (TP.char '<') (TP.char '>') inside
+  return ("COLLEC "++l)
+  where inside = do
+          whitesTok
+          ie <- varnameTokD
+          whitesTok
+          return ie
+collecTokD = withDebug "collec" collecTok
 
 funcCallTok :: TP.Parsec String ParseInfo String
 funcCallTok = do
-  f <- funcnameTok
-  whitesTok
-  p <- TP.between (TP.char '(') (TP.char ')') (TP.sepBy (do { whitesTok
-                                                            ; litteralTok
-                                                            ; whitesTok })
-                                                (TP.char ','))
-  state <- TP.getState
-  let newFC = FuncInfo f "ukn" (length p) (currentPos state)
-  TP.setState (state { calls = newFC: calls state })
-  return ("FUNCALL "++f++"("++ show (length p) ++")")
+  startTrace "funccall"
+  -- gard using State
+  guardState <- TP.getState
+  let n = nbCall guardState
+  if n > 5
+    then do TPC.parserTrace "GUARD"
+            endTrace
+            return "FUNCALL __STOP__"
+    else do TP.setState (guardState { nbCall = n+1})
+            f <- funcnameTokD
+            state <- TP.getState
+            p <- TP.between (TP.char '(') (TP.char ')') (TP.sepBy (do { whitesTok
+                                                                      ; litteralTokD
+                                                                      ; whitesTok })
+                                                         (TP.char ','))
+            let newFC = FuncInfo f "ukn" (length p) (currentPos state)
+            state_end <- TP.getState
+            TP.setState (state_end { calls = newFC: calls state_end })
+            endTrace
+            return ("FUNCALL "++f++"("++ show (length p) ++")")
+funcCallTokD :: TP.Parsec String ParseInfo String
+funcCallTokD = withDebug "funccall" funcCallTok
 
 funcnameTok :: TP.Parsec String ParseInfo String
 funcnameTok = do
-  l <- TP.letter TP.<|> TP.char '_'
-  ls <- TP.many (TP.alphaNum TP.<|> TP.oneOf "_")
-  trace ("FUNC l:"++ show l ++" ls:"++ show ls) $ return (l:ls)
+  f <- TP.try collecTok
+    TP.<|> TP.try arrayTok
+    TP.<|> varnameTokD
+  TPC.parserTrace ("FUNC "++ show f )
+  return f
+funcnameTokD = withDebug "funcname" funcnameTok
+
+-- TODO parse funcCall avec, avant, des char any OU sep MAIS PAS {}
+bodyTok :: TP.Parsec String ParseInfo [String]
+bodyTok = do
+  TP.many ( do { f <- TP.try funcCallTok
+                      TP.<|> TP.many1 (TP.noneOf "{}; \t\f\v")
+               ; whites1Tok
+               ; return f })
+bodyTokD = withDebug "body" bodyTok
+
+wBodyTok :: TP.Parsec String ParseInfo [String]
+wBodyTok = do
+  whitesTok
+  bodyTok
+wBodyTokD = withDebug "wBody" wBodyTok
 
 parseFunc :: TP.Parsec String ParseInfo a -> String -> Either TP.ParseError a
 parseFunc rule = TP.runParser rule (initParseInfo "cin") "ukn"
 
 parseFuncS :: TP.Parsec String ParseInfo a -> String -> Either TP.ParseError ParseInfo
 parseFuncS rule = TP.runParser (rule >> TP.getState) (initParseInfo "cin") "ukn"
+
+parseFuncF :: TP.Parsec String ParseInfo a -> FilePath -> IO (Either TP.ParseError a)
+parseFuncF rule filename = do
+  { input <- readFile filename
+  ; let res = TP.runParser rule (initParseInfo filename) "file" input
+  ; return res }
+
+parseFuncFS :: TP.Parsec String ParseInfo a -> FilePath -> IO (Either TP.ParseError ParseInfo)
+parseFuncFS rule filename = do
+  { input <- readFile filename
+  ; let res = TP.runParser (rule >> TP.getState) (initParseInfo filename) "file" input
+  ; return res }
