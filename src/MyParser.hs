@@ -17,6 +17,9 @@ import Debug.Trace
 
 -- TODO count whitespace ?
 
+-- TODO parseFuncFS manyFuncTokD "input_prog.txt" NE MARCHE PAS !!!
+-- ==> essayer body avec {} imbriquées.
+
 -- *****************************************************************************
 -- ************************************************************************ Info
 data ParseInfo = ParseInfo
@@ -132,29 +135,50 @@ incPos info = Info { filename=filename info, pos= pos info + 1 }
 
 -- *****************************************************************************
 -- ******************************************************************** Function
--- funcDefTok :: TP.Parsec String Info [[String]]
--- funcDefTok = do
---   t <- typeTok
---   whitesTok
---   f <- funcnameTok
---   whitesTok
---   a <- TP.between (TP.char '(') (TP.char ')') argsTok
---   balancedBrakTok
---   return (["FUNC",t,f]:a)
+funcDefTok :: TP.Parsec String ParseInfo String
+funcDefTok = do
+  -- TODO add into State
+  t <- typeTokD
+  whites1Tok
+  f <- varnameTokD
+  state <- TP.getState
+  --whitesTok
+  a <- TP.between (TP.char '(') (TP.char ')') argsTokD
+  --balancedBrakTokD
+  whitesTok
+  TP.between (TP.char '{') (TP.char '}') bracketedBodyTokD
+  state_end <- TP.getState
+  let newFD = FuncInfo f "ukn" (length a) (currentPos state)
+  TP.setState (state_end { defs = newFD : defs state_end })
+  return ("FUNCDEF "++t++" <- "++f++ show a)
+funcDefTokD :: TP.Parsec String ParseInfo String
+funcDefTokD = withDebug "funcdef" funcDefTok
 
--- argsTok :: TP.Parsec String Info [[String]]
--- argsTok = do
---    a <- argTok `TPC.sepBy` (TP.char ',')
---    return a
+typeTok :: TP.Parsec String ParseInfo String
+typeTok = do
+  f <-  TP.try (collecTok)
+    TP.<|> varnameTokD
+  TPC.parserTrace ("TYPE "++ show f)
+  return f
+typeTokD :: TP.Parsec String ParseInfo String
+typeTokD = withDebug "type" typeTok
 
--- argTok :: TP.Parsec String Info [String]
--- argTok = do
---   whitesTok
---   t <- typeTok
---   whitesTok
---   f <- TPC.option "noname" funcnameTok
---   whitesTok
---   return ["ARG", t, f]
+argsTok :: TP.Parsec String ParseInfo [String]
+argsTok = do
+   a <- argTokD `TPC.sepBy` (TP.char ',')
+   TPC.parserTrace ("ARGS "++ show a)
+   return a
+argsTokD = withDebug "args" argsTok
+
+argTok :: TP.Parsec String ParseInfo String
+argTok = do
+  whitesTok
+  t <- typeTokD
+  whitesTok
+  f <- TPC.option "noname"varnameTokD
+  whitesTok
+  return ("ARG "++ t ++ " <- " ++ f)
+argTokD = withDebug "arg" argTok
 
 -- typeTok :: TP.Parsec String st String
 -- --typeTok = TP.letter >> TP.many (TP.alphaNum TP.<|> TP.oneOf "[<>]")
@@ -253,7 +277,7 @@ varnameTok :: TP.Parsec String ParseInfo String
 varnameTok = do
   l <- TP.letter TP.<|> TP.char '_'
   ls <- TP.many (TP.alphaNum TP.<|> TP.oneOf "_")
-  TPC.parserTrace ("VAR l:"++show l++" ls:"++show ls)
+  TPC.parserTrace ("VAR "++ (l:ls))
   return (l:ls)
 varnameTokD = withDebug "varname" varnameTok
 
@@ -320,8 +344,8 @@ funcCallTokD = withDebug "funccall" funcCallTok
 
 funcnameTok :: TP.Parsec String ParseInfo String
 funcnameTok = do
-  f <- TP.try collecTok
-    TP.<|> TP.try arrayTok
+  f <- TP.try (collecTokD)
+    TP.<|> TP.try arrayTokD
     TP.<|> varnameTokD
   TPC.parserTrace ("FUNC "++ show f )
   return f
@@ -341,6 +365,25 @@ wBodyTok = do
   whitesTok
   bodyTok
 wBodyTokD = withDebug "wBody" wBodyTok
+
+-- body with possible nested {}
+bracketedBodyTok :: TP.Parsec String ParseInfo ()
+bracketedBodyTok = do
+  go
+  return ()
+  where go = do { wBodyTok
+                ; TP.many (do { TP.between (TP.char '{') (TP.char '}') go
+                              ; wBodyTok })
+                }
+bracketedBodyTokD = withDebug "brakBody" bracketedBodyTok
+
+manyFuncTok = do
+  whitesTok
+  TP.many( do { f <- funcDefTokD
+              ; whitesTok
+              ; return f })
+manyFuncTokD = withDebug "manyFunc" manyFuncTok
+
 
 parseFunc :: TP.Parsec String ParseInfo a -> String -> Either TP.ParseError a
 parseFunc rule = TP.runParser rule (initParseInfo "cin") "ukn"
